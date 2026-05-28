@@ -2,47 +2,64 @@ import wbgapi as wb
 import pandas as pd
 import os
 
-# Cria a pasta se não existir
-if not os.path.exists('dados'):
-    os.makedirs('dados')
+diretorio_atual = os.path.dirname(os.path.abspath(__file__))
+pasta_dados = os.path.join(diretorio_atual, 'dados')
 
-# Indicadores: PIB per capita, Investimento em Educação e População Total (SP.POP.TOTL)
-indicadores = {
-    'NY.GDP.PCAP.CD': 'pib_per_capita',
-    'SE.XPD.TOTL.GB.ZS': 'investimento_educacao',
-    'SP.POP.TOTL': 'populacao'
-}
+if not os.path.exists(pasta_dados):
+    os.makedirs(pasta_dados)
 
-print("Baixando dados atualizados do Banco Mundial (incluindo População)...")
+print("Conectando ao Banco Mundial...")
 
-# Baixa os dados
-df = wb.data.DataFrame(list(indicadores.keys()),
-                       mrnev=15, labels=True).reset_index()
+try:
+    print("Baixando dados de PIB per capita...")
+    pib_df = wb.data.DataFrame(
+        'NY.GDP.PCAP.CD', mrnev=15, labels=True).reset_index()
 
-# O Banco Mundial retorna 'Economy' (Nome do país) e 'series' (Código do indicador)
-df = df.rename(columns={'Economy': 'pais', 'series': 'indicador'})
+    print("Baixando dados de Investimento em Educação...")
+    edu_df = wb.data.DataFrame(
+        'SE.XPD.TOTL.GB.ZS', mrnev=15, labels=True).reset_index()
 
-# SEPARAÇÃO SEGURA: Pega apenas as colunas de identificação e as colunas de anos (que começam com 'YR')
-colunas_anos = [col for col in df.columns if col.startswith('YR')]
-df = df[['pais', 'indicador'] + colunas_anos]
+    print("Baixando dados de População Total...")
+    pop_df = wb.data.DataFrame(
+        'SP.POP.TOTL', mrnev=15, labels=True).reset_index()
 
-# Achatamento da tabela (agora 100% seguro contra textos)
-df = df.melt(id_vars=['pais', 'indicador'], var_name='ano', value_name='valor')
+    def estruturar_tabela(df, nome_coluna_final):
+        col_codigo = 'economy'
+        col_nome = 'Economy'
+        colunas_anos = [col for col in df.columns if col.startswith('YR')]
 
-# Limpa o texto 'YR' do ano e converte para número (Ex: 'YR2010' vira 2010)
-df['ano'] = df['ano'].str.replace('YR', '').astype(int)
+        df_filtrado = df[[col_codigo, col_nome] + colunas_anos]
+        df_melted = df_filtrado.melt(
+            id_vars=[col_codigo, col_nome], var_name='ano', value_name=nome_coluna_final)
+        df_melted['ano'] = df_melted['ano'].str.replace('YR', '').astype(int)
 
-# Remonta a tabela cruzada
-df = df.pivot_table(index=['pais', 'ano'],
-                    columns='indicador', values='valor').reset_index()
+        df_melted = df_melted.rename(
+            columns={col_codigo: 'codigo', col_nome: 'pais'})
+        return df_melted
 
-# Renomeia os indicadores para os nomes finais do projeto
-df = df.rename(columns={
-    'NY.GDP.PCAP.CD': 'pib_per_capita',
-    'SE.XPD.TOTL.GB.ZS': 'investimento_educacao',
-    'SP.POP.TOTL': 'populacao'
-})
+    pib = estruturar_tabela(pib_df, 'pib_per_capita')
+    edu = estruturar_tabela(edu_df, 'investimento_educacao')
+    pop = estruturar_tabela(pop_df, 'populacao')
 
-# Salva o arquivo atualizado
-df.to_csv('dados/dados_banco_mundial.csv', index=False)
-print("Arquivo 'dados/dados_banco_mundial.csv' atualizado com sucesso e livre de erros!")
+    print("Combinando as bases de dados...")
+    df_final = pd.merge(pib, edu, on=['codigo', 'pais', 'ano'], how='outer')
+    df_final = pd.merge(df_final, pop, on=[
+                        'codigo', 'pais', 'ano'], how='outer')
+
+    df_final = df_final.dropna(
+        subset=['pib_per_capita', 'investimento_educacao', 'populacao'], how='all')
+
+    df_final['pib_per_capita'] = pd.to_numeric(
+        df_final['pib_per_capita'], errors='coerce')
+    df_final['investimento_educacao'] = pd.to_numeric(
+        df_final['investimento_educacao'], errors='coerce')
+    df_final['populacao'] = pd.to_numeric(
+        df_final['populacao'], errors='coerce')
+
+    caminho_salvar = os.path.join(pasta_dados, 'dados_banco_mundial.csv')
+    df_final.to_csv(caminho_salvar, index=False)
+
+    print("Sucesso! Dados numéricos e textuais gravados com sucesso.")
+
+except Exception as e:
+    print(f"Erro durante a execução: {e}")
